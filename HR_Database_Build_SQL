@@ -1,0 +1,194 @@
+#The below questions and code ensure we set up our tables corectly applied to 3NF. In addition there are some exercises where we create views and fucntions for ease of use of the database.
+#Lastly we set up databse rules and security, making some tables available to certain roles of users and revoking access to certain tables making sure employee salary data is private.
+
+# Question 1: Return a list of employees with Job Titles and Department Names.
+
+select emp_name, j.job_nm, department_nm
+from employee as e
+join assignment as a
+on e.emp_id = a.emp_id
+join job as j
+on a.job_id = j.job_id
+join department as d
+on a.department_id = d.department_id;
+
+# Question 2: Insert Web Programmer as a new job title.
+
+insert into job(job_nm)
+values ('Web Programmer');
+
+# Question 3: Correct the job title from web programmer to web developer.
+
+update job 
+set job_nm = 'Web Developer'
+where job_nm = 'Web Programmer';
+
+# Question 4: Delete the job title Web Developer from the database.
+
+delete from job
+where job_nm = 'Web Developer';
+
+# Question 5: How many employees are in each department?
+
+select d.department_nm, count(e.emp_id) as num_emp
+from employee as e
+join assignment as a
+on e.emp_id = a.emp_id
+join department as d
+on a.department_id = d.department_id
+group by d.department_nm;
+
+# Question 6: Write a query that returns current and past jobs (include employee name, job title, department, manager name, start and end date for position) for employee Toni Lembeck.
+
+select e.emp_name, j.job_nm, d.department_nm, m.manager_nm, start_dt, end_dt 
+from assignment as a
+join employee as e
+on a.emp_id = e.emp_id
+join job as j
+on a.job_id = j.job_id
+join department as d
+on a.department_id = d.department_id
+join manager as m
+on a.manager_id = m.manager_id
+where emp_name = 'Toni Lembeck';
+
+###############################################
+
+#Above and Beyond workspace
+
+###############################################
+
+## 1: Create a view that returns all employee attributes; results should resemble initial Excel file.
+
+# General syntax to create a view
+CREATE VIEW view_name AS
+SELECT col_1, col_2, ...
+FROM table_name
+WHERE condition;
+
+create view employees as
+select e.emp_name, e.emp_email, j.job_nm, d.department_nm, l.location_nm, aa.address_nm, c.city_nm, ss.state_nm, m.manager_nm, ed.education_lvl, s.hire_dt, s.sal_val, start_dt, end_dt
+from assignment as a
+join employee as e
+on a.emp_id = e.emp_id
+join education as ed
+on e.education_lvl_id = ed.education_lvl_id
+join job as j
+on a.job_id = j.job_id
+join department as d
+on a.department_id = d.department_id
+join manager as m
+on a.manager_id = m.manager_id
+join location as l
+on a.location_id = l.location_id
+join address as aa
+on l.location_id = aa.address_id
+join city as c
+on aa.city_id = c.city_id
+join state as ss
+on c.state_id = ss.state_id
+join salary as s
+on a.assignment_id = s.assignment_id;
+
+##########################################################
+
+## 2: Create a stored procedure with parameters that returns current and past jobs (include employee name, job title, department, manager name, start and end date for position) when given an employee name.
+
+#stored procedures or functions are good for network traffic and many user needs.
+
+CREATE OR REPLACE FUNCTION job_history(p_emp_name VARCHAR)
+  RETURNS TABLE (
+    emp_name VARCHAR,
+    job_nm VARCHAR,
+    department_nm VARCHAR,
+    manager_nm VARCHAR,
+    start_dt DATE,
+    end_dt DATE
+  )
+  LANGUAGE SQL
+AS $$
+  SELECT
+    e.emp_name,
+    j.job_nm,
+    d.department_nm,
+    m.manager_nm,
+    a.start_dt,
+    a.end_dt
+  FROM assignment AS a
+  JOIN employee AS e 
+  ON a.emp_id = e.emp_id
+  JOIN job AS j 
+  ON a.job_id = j.job_id
+  JOIN department AS d 
+  ON a.department_id = d.department_id
+  JOIN manager AS m 
+  ON a.manager_id = m.manager_id
+  WHERE e.emp_name = p_emp_name;
+$$;
+
+SELECT * 
+FROM job_history('Toni Lembeck');
+
+SELECT * 
+FROM job_history('Tom Meola');
+
+SELECT * 
+FROM job_history('Melinda Fisher');
+
+##########################################################
+
+## 3: Create a non-management user named NoMgr. Show the code of how your would grant access to the database, but revoke access to the salary data.
+# Related links: 
+  # https://www.postgresql.org/docs/current/sql-createrole.html
+
+Create role NoMgr LOGIN;
+
+#How to login as the new role
+
+psql -h localhost -U NoMgr hr-db
+
+# i Have not permitted the nomgr role to be able to login to we have to enable this
+
+alter role nomgr with LOGIN;
+
+# verifies the role nomgr and shows its attributes
+\du nomgr
+
+#login to our postgresql database as nomgr
+psql -h localhost -U NoMgr postgres
+
+#show who the current user is
+select current_user;
+
+#at the admin role we can grant access to nomgr to ONLY the tables we want to provide 
+
+grant select
+on employee, job, manager, department, EDUCATION, location, address, state, city, assignment
+to nomgr;
+
+exit
+psql -h localhost -U NoMgr postgres
+select * from job;
+select current_user;
+
+select * from salary
+
+# OR we can grant the nomgr role access to everything and then revoke the salary table. 
+
+grant select
+on all tables in hr-db public
+to nomgr;
+
+#login as nomgr and check access
+
+#go back to admin role
+
+revoke select 
+on salary 
+from nomgr;
+
+#login as nomgr
+
+select * from salary limit 10;
+
+# once we run the above command, we should see "permission denied"
