@@ -1,0 +1,199 @@
+#Deploy a PostgreSQL instance from the command line passing these arguments
+docker run --name hr-db -e POSTGRES_PASSWORD=root -p 5432:5432 -d postgres
+
+#to determine name of container
+docker ps
+
+#execute and enter into the docker postgres container we just made at the bash prompt
+docker exec -it <insert container name or ID> bash
+
+#To initialize a SQL object with youre in the postgres cli, not bash, not query command line. dataset needs to be .sql extension
+psql -f /home/workspace/L4-creating-a-physical-database/ex2/etl_stage.sql
+
+#Once the container is running, in docker desktop, i created a directory in the containers home directory called pg-data and moved local
+#files to it in order to import the dataset from the containers filesystem into the postgres application database
+sudo docker cp /Users/my/local/path/file_name.csv <container id>:/home/pg-data
+
+#Enter the container at the OS level, here we will enter to the linux bash prompt, then enter the postgres prompt, then the SQL prompt
+docker exec -it <container ID> bash  
+su - postgres  
+psql 
+
+# First, create the table that we will copy the data into. Thi is our staging table.
+CREATE table stg_table(
+EMP_ID varchar(30),
+EMP_NM varchar(50), 
+EMAIL varchar(100), 
+HIRE_DT date, 
+JOB_TITLE varchar(50), 
+SALARY Money, 
+DEPARTMENT varchar(50), 
+MANAGER varchar(50), 
+START_DT date, 
+END_DT date, 
+LOC varchar(100), 
+ADDY varchar(100), 
+CITY varchar(60), 
+STATE varchar(30),
+EDUCATION_LVL varchar(70));
+
+#Copy the CSV data from the containers filesystem into our postgresql stg_table
+
+COPY stg_table (EMP_ID, EMP_NM, EMAIL, HIRE_DT, JOB_TITLE, SALARY, DEPARTMENT, MANAGER, START_DT, END_DT, LOC, ADDY, CITY, STATE, EDUCATION_LVL)  
+  FROM '/home/pg-data/hr-ds-use.csv'  
+  WITH (FORMAT csv, HEADER true);
+
+#Before weve copied the data into our DB, we should have cleaned it and made sure the data is proper and consistent
+
+#Next we will create our other tables. Using the physical model we've created, we'll make the tables from
+#left to right.
+
+create table state(
+state_id serial primary key,
+state_nm varchar(50));
+
+create table city(
+city_id serial primary key, 
+city_nm varchar(50), 
+state_id int references state(state_id));
+
+create table address(
+address_id serial primary key,
+address_nm varchar(200),
+city_id int references city(city_id));
+
+create table location(
+location_id serial primary key,
+location_nm varchar(200),
+address_id int references address(address_id));
+
+create table manager(
+manager_id serial primary key,
+manager_nm varchar(100));
+
+create table department(
+department_id serial primary key,
+department_nm varchar(200));
+
+create table job(
+job_id serial primary key,
+job_nm varchar(100));
+
+create table education(
+education_lvl_id serial primary key,
+education_lvl varchar(100));
+
+CREATE TABLE employee (
+emp_id VARCHAR(20) PRIMARY KEY,
+emp_name VARCHAR(100) NOT NULL,
+email VARCHAR(100) NOT NULL UNIQUE,
+manager_id int references manager(manager_id),
+hire_date DATE NOT NULL,
+education_level_id INT NOT NULL REFERENCES education(education_lvl_id));
+
+CREATE TABLE assignment (
+  assignment_id SERIAL primary key,
+  emp_id VARCHAR(20) NOT NULL REFERENCES employee(emp_id),
+  job_id INT NOT NULL REFERENCES job(job_id),
+  department_id INT NOT NULL REFERENCES department(department_id),
+  manager_id int REFERENCES manager(manager_id),
+  location_id INT NOT NULL REFERENCES location(location_id),
+  start_dt DATE NOT NULL,
+  end_dt DATE);
+
+#Lastly, this table will be the salary table, extracting this data to a new table ensures data security and confidentiality
+#of peoples personal pay information
+
+create table salary (
+    sal_id serial primary key,
+    assignment_id int references assignment(assignment_id),
+    sal_val money not null,
+    hire_dt date);
+
+#Next we have to populate or load data into all our tables. 
+#Again, we will start from left to right loading data into all tables that do not have a foreign key.
+
+insert into state (state_nm)
+select distinct state from stg_table;
+
+#############################################################
+
+#After we ran this load command, I had an extra null value show up in my states table.
+#went to check the stg_table and i had 3 extra rows at the bottom of the table. 
+
+#First i had to delete the data in the states table
+
+delete from state *;
+
+#Below is how i got rid of the null rows.
+
+delete from stg_table 
+where emp_id is null 
+and start_dt is null;
+
+#############################################################
+
+insert into job (job_nm)
+select distinct job_title from stg_table;
+
+insert into education (education_lvl)
+select distinct education_lvl from stg_table;
+
+insert into manager (manager_nm)
+select distinct manager from stg_table;
+
+insert into city (city_nm, state_id)
+SELECT DISTINCT(s.city), st.state_id 
+FROM stg_table as s
+JOIN state as st 
+ON s.state = st.state_nm;
+
+insert into address (address_nm, city_id)
+SELECT DISTINCT(s.addy), c.city_id 
+FROM stg_table as s
+JOIN city as c 
+ON s.city = c.city_nm;
+
+insert into location (location_nm, address_id)
+SELECT DISTINCT(s.loc), a.address_id 
+FROM stg_table as s
+JOIN address as a
+ON s.addy = a.address_nm;
+
+insert into department (department_nm)
+SELECT DISTINCT department FROM stg_table;
+
+INSERT INTO employee (
+emp_id,
+emp_name,
+emp_email,
+hire_date,
+education_lvl_id)
+SELECT DISTINCT(s.emp_id),
+s.emp_nm,
+s.email,
+s.hire_dt,
+e.education_lvl_id
+FROM stg_table AS s
+JOIN education AS e 
+ON s.education_lvl = e.education_lvl;
+
+insert into assignment (emp_id, job_id, department_id, manager_id, location_id, start_dt, end_dt)
+select e.emp_id, j.job_id, d.department_id, m.manager_id, l.location_id, s.start_dt, s.end_dt
+from stg_table as s
+join employee as e
+on e.emp_id = s.emp_id
+join job as j
+on s.job_title = j.job_nm
+join department as d
+on s.department = d.department_nm
+join manager as m
+on s.manager = m.manager_nm
+join location as l
+on s.loc = l.location_nm;
+
+insert into salary (assignment_id, sal_val, hire_dt)
+select a.assignment_id, s.salary, s.hire_dt
+from stg_table as s
+join assignment as a
+on s.emp_id = a.emp_id;
