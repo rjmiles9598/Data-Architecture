@@ -1,0 +1,147 @@
+
+// Signing into our Snowflake accounts CLI terminal to configure local and maybe even remote access 
+// This may be useful for importing larger datasets into Snowflake
+
+snowsql -a <unique_url_id> -u <insert_username>
+
+// We create and use our database
+
+CREATE DATABASE TEST_STAGING_SCHEMAS;
+USE DATABASE TEST_STAGING_SCHEMAS;
+
+// We create and use our schema
+
+CREATE SCHEMA STAGING;
+USE SCHEMA STAGING;
+
+// Create FILE FORMATS that we will be able to use to ingest our data based on.
+
+    //  JSON file format creation for unstructured data
+
+    create or replace file format myjsonformat type = 'JSON' strip_outer_array = true;
+
+    //  CSV File format creation for structured data
+
+    create or replace file format mycsvformat type = 'CSV' 
+
+//We create an intermediate area where we can copy our local files into  the snowflake environment. these are our stages.
+
+create or replace stage my_json_stage file_format = myjsonformat;
+
+// Put our desired local file into the json staging area
+
+put file :///Users/determine/your/files/correct/path/userdetails.json @my_json_stage auto_compress=true
+
+// we need to create a table that we will put our staged data into. there are two options below.
+
+//option A - typically the variant type is used for unstructued data formats
+create table userdetails(usersjson variant);
+
+//option B - explicitly claiming the types of columns is best for structured data.
+create table UserDetails(
+    Email string,
+    FirstName string,
+    LastName string,
+    Phone number,
+    Userid number
+);
+
+//Becasue we compressed the file to get it into Snowflake we have to uncompress it when we copy the data into our table
+
+copy into userdetails from @my_json_stage/userdetails.json.gz file_format = format_name = myjsonformat) on_error = 'skip_file';
+
+// we do a very similar workflow for structured data like CSV files
+
+// we have two more files that are csv that we will ingest
+
+use DATABASE UDACITY_PROJ_1;
+
+use SCHEMA STAGING;
+
+create or replace file format myjsonformat type = 'JSON' strip_outer_array = true;
+
+create or replace file format mycsvformat type = 'CSV' COMPRESSION = 'Auto' FIELD_DELIMITER = ',' 
+RECORD_DELIMITER = '\n' SKIP_HEADER = 1 FIELD_OPTIONALLY_ENCLOSED_BY = 'NONE' TRIM_SPACE = FALSE 
+ERROR_ON_COLUMN_COUNT_MISMATCH = TRUE ESCAPE = 'NONE' ESCAPE_UNENCLOSED_FIELD = '\134' DATE_FORMAT = 'AUTO' 
+TIMESTAMP_FORMAT = 'AUTO' NULL_IF = ('\\N');
+
+create or replace stage my_CSV_stage file_format = mycsvformat;
+
+put file:///Users/determine/your/files/correct/path/floors.csv @my_CSV_stage auto_compress=true;
+put file:///Users/determine/your/files/correct/path/rooms.csv @my_CSV_stage auto_compress=true;
+
+create table floors(
+    FloorID number,
+    FloorName string,
+    BuildingID number
+);
+
+create table rooms(
+    RoomID number,
+    RoomName string,
+    FloorID number,
+    BuildingID number,
+    Total Area number,
+    Cleaned Area number
+);
+
+copy into floors from @my_CSV_stage/floors.csv file_format = (format_name = mycsvformat) on_error = 'skip_file';
+copy into rooms from @my_CSV_stage/rooms.csv file_format = (format_name = mycsvformat) on_error = 'skip_file';
+
+//////////////////// Loading Large data Files in Snowflake //////////////////////////
+
+use database big_data_db;
+use schema staging;
+
+create or replace file format mycsvformat type = 'CSV' COMPRESSION = 'Auto' FIELD_DELIMITER = ',' 
+    RECORD_DELIMITER = '\n' SKIP_HEADER = 1 FIELD_OPTIONALLY_ENCLOSED_BY = 'NONE' TRIM_SPACE = FALSE 
+    ERROR_ON_COLUMN_COUNT_MISMATCH = TRUE ESCAPE = 'NONE' ESCAPE_UNENCLOSED_FIELD = '\134' DATE_FORMAT = 'AUTO' 
+    TIMESTAMP_FORMAT = 'AUTO' NULL_IF = ('\\N'
+);
+
+create or replace stage big_data_stage file_format = mycsvformat;
+
+//below we indicate "parallel=2" this chunks our dataset into 2 pieces enabling 2 CPU cores to process this dara
+
+put file://Users/determine/your/files/correct/path/large.csv @big_data_stage auto_compress=true parallel=2;
+
+//The previouos command will create large.csv.gz file in the staging area. Copy data from the staging area to the table:
+
+create table big_table(
+    pickup_datetime string,
+    dropoff_datetime string,
+    pickup_longitude double,
+    pickup_latitude double,
+    dropoff_longitude double,
+    dropoff_latitude double,
+    trip_distance double,
+    fare_amount double
+);
+
+copy into big_table from @big_data_stage/large.csv.gz file_format = (format_name = mycsvformat) on_error = 'skip_file';
+
+//////////// We want to transform JSON data into flat tables for our ODS system ////////////
+
+//First we create a table in our ODS schema
+
+use database TEST_STAGING_SCHEMAS;
+use schema ODS;
+create table UserDetails(
+    email string,
+    firstname string,
+    lastname string,
+    phone number,
+    userid number
+);
+
+// we then insert the JSON data into our flat table to be queried
+insert into UserDetails
+select
+usersjson:emailAddress,
+usersjson:firstName,
+usersjson:lastName,
+usersjson:phoneNumber,
+usersjson:userId
+from TEST_STAGING_SCHEMAS.STAGING.UserDetails;
+
+select * from UserDetails limit 10;
